@@ -1,0 +1,1 @@
+C:\Users\PC.5014885\.platformio\penv\Scripts\platformio.exe run --target upload --environment seeed_xiao

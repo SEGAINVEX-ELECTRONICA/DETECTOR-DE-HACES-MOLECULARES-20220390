@@ -1,0 +1,467 @@
+/**********************************************************
+  Proyecto: Electrónica para detector de haces moleculares
+  OT:20220390
+  Set point del filamento
+  Lee dos rotary encoder y envía sus valores
+  por esp-now al microcontrolador del filamento
+  Recibe las medidas de corriente y tensión
+  desde el microcontrolador del filamento
+
+  UNIVERSIDAD AUTÓNOMA DE MADRID
+  (SEGAINVEX-ELECTRÓNICA)
+  PAtricio Coronado Collado:
+  Ultima actualización 11 de marzo de 2024
+************************************************************/
+#include <Arduino.h>
+#include "scpi.h"
+#include <espnow.h>
+#include <ESP8266WiFi.h>
+#include "tipos.h" //Tipos compartidos con el módulo filamento.h
+#include <Wire.h>
+#include "U8g2lib.h" //Display
+#include <Ticker.h>  //Temporiza eventos repetitivos o únicos
+// #include "RotaryEncoder.h"
+//***********************************************************
+//  * funciones
+//***********************************************************
+void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus);
+void OnDataRecv(uint8_t *mac, uint8_t *incomingData, uint8_t len);
+void envia_set_point(void);
+void int_switch(void);
+void sw_pulsado(void);
+void inline serial_datos(void);
+inline void actualiza_display(void);
+void int_encoder(void);
+bool cambio_encoder(int *);
+void set_flag_1(void);
+inline void lee_encoder(void);
+inline void display_presentacion(void);
+void int_pulsador(void);
+//***********************************************************
+//  Macros
+//***********************************************************
+#define DEP(x)      \
+    if (depuracion) \
+    Serial.println(x)
+//***********************************************************
+// constantes y variables globales
+//***********************************************************
+#define LINEA1 1 // Del display
+#define LINEA2 5
+#define CONVERSION_ROTARY_CORRIENTE 10.0 // Cada unidad de % del rotary encoder es 0.1A
+#define CONVERSION_ROTARY_VOLTIOS 10.0   // Cada unidad de % del rotary encoder es 0.1V
+int encoderCorriente = 0;// Valor del setpoint de corriente
+#define ENCODER_V_f encoderTension / CONVERSION_ROTARY_VOLTIOS
+#define ENCODER_I_f encoderCorriente / CONVERSION_ROTARY_CORRIENTE
+int encoderTension = 50; //Por defecto (50) 5V tensión máxima
+// int encoderI = -1;    // Estado del rotary encoder I
+// int encoderTension = -1;    // Estado del rotary encoder V
+int *encoderActivo = &encoderCorriente; // Rotary  I activo por defecto
+// int *encoderActivo=&encoderI; //Rotary  I activo por defecto
+bool estadoSw = false;              // Para leer el switch del encoder
+bool clkRotary = true;              // Valor del pin clk del rotary
+bool dtRotary = true;               // Valor del pin dt del rotary
+bool intSwitch = false;             // Valor del pin sw del rotary
+bool flagIntEncoder = true;         // Flag de la interrupción del rotary encoder
+bool encoderCorrienteActivo = true; // true Encoder corriente y false encode tensión
+bool encoderTensionActivo = false; // 
+bool limiteV = false;
+float iFilamento, vFilamento = 0;
+float temperatura = -1.0;
+bool estadoLed;
+bool reguladorActivo; // no se usa. Para compatibilizar con scpi.h que comparte con filamento.h
+bool depuracion = false;
+bool datosNuevos = true; // Para que empiece enviando datos
+bool flag1 = true;
+//
+bool intPulsador=true; //Flag que avisa de int. del pulsador
+bool filamentoApagado=false; //Flag para indicar filamento apagado
+//
+#define MILISEGUNDOS_LOOP 2000 // Temporización en el loop
+#define T_ANTIRREBOTE 5        // Tiempo de espera del antirrebote de los rotary encoder
+#define FREQ_I2C 400000        // Frecuencia del bus i2c
+// Pines
+// PIN_WIRE_SDA=D2 (4) Pines por defecto del I2C
+// PIN_WIRE_SCL=D1 (5)
+#define SW D3
+#define DT D6
+#define CK D7
+#define PULSADOR D0
+#define BUZZER D8
+// Constantes de buzzer
+#define FREQ_LIM 500  // hz frecuencia
+#define MS_LIM 30     // mseg tiempo de duración
+#define FREQ_PRE 1000 // hz frecuencia
+#define MS_PRE 10     // mseg tiempo de duración
+// Constantes del rotary encoder
+#define LIM_MAX 100 // Valores límite del rotary encoder
+#define LIM_MIN 0   // Límite inferior
+#define DELTA 1     // Incremento en cada pulso
+bool datosRecibidos = false;
+bool datosEnviados = false;
+int enviosFallidos = 0;
+unsigned long antes = 0;
+// espnow
+struct_message datosSalientes;                                     // Estructura de datos salientes
+struct_message datosEntrantes;                                     // Para copiar los datos recibidos
+uint8_t broadcastAddress[] = {0x08, 0x3A, 0x8D, 0xCF, 0x85, 0x8A}; // Mac del filamento
+const char *identificacion = " S.P. FILAMENTO";
+bool spnowActivo = false;
+bool suenaBeepLimite = false;
+//***********************************************************
+//  objetos
+//***********************************************************
+U8X8_SH1106_128X64_NONAME_HW_I2C display(U8X8_PIN_NONE /*,15,14*/); // Display //argumentos (reset,clk,data);
+Ticker tickMilisegundos;
+//***********************************************************
+// * setup
+//***********************************************************
+void setup()
+{
+    // pines
+    pinMode(SW, INPUT_PULLUP);
+    pinMode(DT, INPUT_PULLUP);
+    pinMode(CK, INPUT_PULLUP);
+    pinMode(PULSADOR, INPUT_PULLUP);//Pulsador de parada
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, HIGH);
+    // Inicializa objetos
+    Serial.begin(115200);
+    Wire.begin();
+    display.begin();
+    display.setBusClock(FREQ_I2C);
+    display_presentacion(); // Cartel de presentación inicial
+    // espnow
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    // Init ESP-NOW
+    if (esp_now_init() != 0)
+        spnowActivo = false;
+    else
+        spnowActivo = true;
+    if (spnowActivo)
+    {
+        // Once ESPNow is successfully Init, we will register for Send CB to get the status of Trasnmitted packet
+        esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+        esp_now_register_send_cb(OnDataSent);
+        // Register peer
+        esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
+        // Register for a callback function that will be called when data is received
+        esp_now_register_recv_cb(OnDataRecv);
+        // wATCHDOG
+        attachInterrupt(SW, int_switch, FALLING);
+        attachInterrupt(CK, int_encoder, FALLING);
+        attachInterrupt(PULSADOR, int_pulsador, FALLING);//Interrupción del pulsador
+        // Watchdog
+        ESP.wdtEnable(300);
+    }
+    envia_set_point();//Envía los valores de setpoin por defecto
+
+}
+//***********************************************************
+// * loop
+//***********************************************************
+void loop()
+{
+    ESP.wdtFeed(); // reinicia el timer del watchdog (alimenta al perro)
+    if (Serial.available())
+    {
+        scpi.scpi(&Serial);
+    } // Atiende al PC
+    // Gestiona la interrupción del encoders ..................
+    if (flagIntEncoder) {lee_encoder();}
+
+    if (intSwitch)// Interrupción de switch.....................
+    { // código que responde al flag de la interrupción del switch del rotary
+        actualiza_display();
+        intSwitch = false; // Baja el flag
+    }                      // Fin de la gestión de la interrupción del switch del rotary
+    // Gestion de datos recibidos ESP NOW.......................
+    if (datosRecibidos)
+    {
+        iFilamento = datosEntrantes.iFilamento;   // Lee la corriente del filamento
+        vFilamento = datosEntrantes.vFilamento;   // Lee la tensión del filamento
+        limiteV = datosEntrantes.limiteTension;   // Lee el flag de limitando por tensión máxima de filamento
+        temperatura = datosEntrantes.temperatura; // Lee la temperatura
+        actualiza_display();
+        digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN)); // Led para ver el evento
+        datosRecibidos = false;
+    }
+    // Tras el envío de datos................................
+    if (datosEnviados || depuracion) // solo en fase de desarrollo
+    {
+        datosEnviados = false;
+    }
+    // Envío de nuevo set point ..............................
+    if (datosNuevos)
+    {
+        envia_set_point(); // Envía por ESP NOW
+        actualiza_display();
+        datosNuevos = false;
+    }
+    // Si se ha pulsado el pulsador actualiza el estado del filamento
+    if (intPulsador) 
+    {
+        filamentoApagado=!filamentoApagado;//Cambia de apagado a encendido y viceversa
+        datosSalientes.swPulsado=filamentoApagado;//Informa a la potencia
+    }
+    // Temporización ..........................................
+    if (millis() - antes > MILISEGUNDOS_LOOP)
+    {
+        //________________________________
+        // codigo temporizado
+        if (depuracion)
+            serial_datos();
+        //_______________________________
+        antes = millis();
+    }
+}
+//***********************************************************
+// Respuesta a la interrupción del encoder
+//  Actualiza el estado del encoder activo
+//***********************************************************
+inline void lee_encoder(void)
+{   
+    clkRotary = digitalRead(CK); // Lee los pines del rotary encoder...
+    dtRotary = digitalRead(DT);  
+    if(filamentoApagado) //Si el filamento está apagado...
+    {
+        encoderCorriente=0;//El set point de corriente a cero.
+        encoderTension=50;//Tensión máxima a su valor por defecto.
+        return;
+    }
+    if (encoderCorrienteActivo && !limiteV) //Lee el encoder de corriente cuando no se está limitando por tensión
+    { // Si el encoder de corriente es el activo y ha cambiado...
+        if (cambio_encoder(&encoderCorriente))
+        {
+            datosNuevos = true; // Para forzar un envío por espnow
+        }
+    }
+    if (encoderCorrienteActivo && limiteV) //Actualiza el encoder de corriente con limitación de tensión
+    { // Si el encoder de corriente es el activo y ha cambiado...
+        int encoder=encoderCorriente;//Copia el estado del encoder de corriente
+        if (cambio_encoder(&encoderCorriente))
+        {   //Si el sistema está limitado por tensión ...
+            if(encoderCorriente>encoder) encoderCorriente=encoder;//...impide que la consigna de tensión aumente
+            else datosNuevos = true; // Para forzar un envío por espnow
+        }
+    }
+    if (encoderTensionActivo) // Si el encoder activo es el de tensión y ha cambiado
+    {
+        if (cambio_encoder(&encoderTension))
+            datosNuevos = true; // Para forzar un envío por espnow
+    }
+    flagIntEncoder = false; // Limpia el flag de la interrupción del rotary encoder
+    if (suenaBeepLimite || limiteV)
+    {
+        suenaBeepLimite = false;
+        tone(BUZZER, FREQ_LIM, MS_LIM);
+    } // Si ha tocado límites suena un beep
+    else tone(BUZZER, FREQ_PRE, MS_PRE);//Suena beep normal
+
+}     // fin de la gestión del rotary encoder
+//***********************************************************
+//  Envía datos del encoder por espnow
+//***********************************************************
+inline void envia_set_point(void)
+{
+    datosSalientes.potCorriente = encoderCorriente;
+    datosSalientes.potTension = encoderTension;
+    if (spnowActivo) // Si espnow está activado envía datos
+    {
+        esp_now_send(broadcastAddress, (uint8_t *)&datosSalientes, sizeof(datosSalientes));
+    }
+}
+/*************************************************************
+  Cartel inicial 2 segundos
+**************************************************************/
+inline void display_presentacion(void) // Cartel de presentación inicial
+{
+    display.clear();
+    // Cambia la resolución
+    display.setFont(u8x8_font_courB18_2x3_f); // Display con un font más grande
+    display.inverse();
+    display.drawString(0, LINEA1, "FILAMENT"); // Cartel de la fila superior
+    display.noInverse();
+    delay(2000); // Presentación inicial del display
+    display.clear();
+}
+//***********************************************************
+// Callback when data is sent
+//***********************************************************
+void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus)
+{
+    datosEnviados = true; // Levanta un flag para que gestione el loop
+    if (sendStatus == 0)
+    {
+    }
+    else
+    {
+        enviosFallidos++;
+    } // Registra fallos
+}
+//***********************************************************
+// Callback when data is received
+//***********************************************************
+void OnDataRecv(uint8_t *mac, uint8_t *incomingData, uint8_t len)
+{
+    memcpy(&datosEntrantes, incomingData, sizeof(datosEntrantes));
+    datosRecibidos = true; // Levanta un flag para que gestione el loop
+}
+//***********************************************************
+// envía todas las variables por
+// el puerto serie
+//***********************************************************
+void inline serial_datos(void)
+{
+    char buffer[64];
+    if (estadoSw)
+        Serial.println("switch activado");
+    else
+        Serial.println("switch desactivada");
+    snprintf(buffer, sizeof buffer, "Encoder1=%d\nEncoder2=%d\n", encoderCorriente, encoderTension);
+    Serial.println(buffer);
+    snprintf(buffer, sizeof buffer, "Corriente=%.2f Amperios\nVoltaje=%.2f Voltios\n", datosEntrantes.iFilamento, datosEntrantes.vFilamento);
+    Serial.println(buffer);
+    snprintf(buffer, sizeof buffer, "Envios fallidos=%d\n\n", enviosFallidos);
+    Serial.println(buffer);
+    Serial.println("---------------------------");
+}
+//***********************************************************
+// Actualiza valores de encoder o medidas reales en el display
+//***********************************************************
+inline void actualiza_display(void)
+{
+    char buffer[16];
+    if (encoderCorrienteActivo) // El encoder está en modo corriente
+    {                           // Muestra la corriente real y la tensión real
+        display.inverse();
+        if (iFilamento > 9.99)
+            snprintf(buffer, sizeof buffer, "%2.1f AMP", iFilamento); // I real
+        else
+            snprintf(buffer, sizeof buffer, "%2.2f AMP", iFilamento); // Muestra la I real
+        display.drawString(0, LINEA1, buffer);
+        display.noInverse();
+        // V real
+        if (vFilamento > 9.99)
+        {
+            if (limiteV)
+                snprintf(buffer, sizeof buffer, "%2.1fVlim", vFilamento); // Tensión real
+            else
+                snprintf(buffer, sizeof buffer, "%2.1f VOL", vFilamento); // Tensión real
+        }
+        else
+        {
+            if (limiteV)
+                snprintf(buffer, sizeof buffer, "%2.2fVlim", vFilamento); // Muestra la tensión real
+            else
+                snprintf(buffer, sizeof buffer, "%2.2f VOL", vFilamento); // Muestra la tensión real
+        }
+        display.drawString(0, LINEA2, buffer); // Muestra la tensión real del filamento
+    }
+    else // el encoder está en modo tensión
+    {    // Muestra la corriente real y el set point de tensión
+        if (iFilamento > 9.99)
+            snprintf(buffer, sizeof buffer, "%2.1f AMP", iFilamento /*iFilamento*/); // I real
+        else
+            snprintf(buffer, sizeof buffer, "%2.2f AMP", iFilamento /*iFilamento*/); // Muestra la I real
+        display.drawString(0, LINEA1, buffer);
+        display.inverse();
+        float spFilamento = (float)encoderTension / CONVERSION_ROTARY_VOLTIOS; // Convierte a float
+        if (spFilamento < 0.0)
+            spFilamento = 0.00;
+        if (spFilamento > 9.99)
+        {
+            if (limiteV)
+                snprintf(buffer, sizeof buffer, "%2.1fVlim", spFilamento);
+            else
+                snprintf(buffer, sizeof buffer, "%2.1f VOL", spFilamento);
+        }
+        else
+        {
+            if (limiteV)
+                snprintf(buffer, sizeof buffer, "%2.2fVlim", spFilamento);
+            else
+                snprintf(buffer, sizeof buffer, "%2.2f VOL", spFilamento);
+        }
+        display.drawString(0, LINEA2, buffer); // Muestra el set point de tensión del filamento
+        display.noInverse();
+    }
+}
+//***********************************************************
+//  callback de la interrupción del switch
+//  del rotary encoder
+//***********************************************************
+void ICACHE_RAM_ATTR int_switch(void)
+{
+    tickMilisegundos.once_ms(T_ANTIRREBOTE, sw_pulsado); // Se activa el timer antirrebote del switch
+}
+//***********************************************************
+// procesa la int. de los pulsadores de los
+// rotary encoder
+//***********************************************************
+void sw_pulsado(void)
+{
+    if (digitalRead(SW))
+        return;                                       // Si lee 1 en el pin sale
+    encoderCorrienteActivo = !encoderCorrienteActivo; // Cambia entre encoder de corriente(true) y tensión como activo (false)
+    encoderTensionActivo=!encoderCorrienteActivo;
+    intSwitch = true;                                 // Para que se gestione
+    return;
+}
+/**************************************************************
+ * Rutina de la interrupción del rotary encoder
+ * attachInterrupt(CLK1, int_encoder, FALLING);
+ * Lee los pines, levanta el flag del rotary y sale.
+ * Y función que actualiza el valor del rotary encoder
+ * llamada desde el loop cuando el flag esté alto
+ * ***********************************************************/
+void ICACHE_RAM_ATTR int_encoder(void) // callback de la interrupción
+{
+    if (flagIntEncoder)
+        return; // Si no ha gestionado la interrupción anterior sale
+    /* clkRotary = digitalRead(CK); // Lee los pines del rotary encoder para gestionarlo en el loop
+    dtRotary = digitalRead(DT); //Se puede leer aquí o en el loop tras ver el flagIntEncoder levantado*/
+    flagIntEncoder = true; // Levanta el flag de la interrupción del rotary encoder y sale
+}
+/*************************************************************
+ *  función llamada desde el loop para actualizar el encoder
+ *  el parámetro de entrada es un puntero al valor de encoder
+ * que se quiere actualzar
+ * ************************************************************/
+inline bool cambio_encoder(int *encoder) // Gestión del encoder ejecutada desde el loop
+{
+    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN)); // Led para ver el evento
+    int16_t rotary = *encoder;                            // guarda el valor inicial de entrada
+    if (clkRotary)
+        return false;                                 // Si CK no está a nivel bajo sale sin hacer nada
+    dtRotary ? *encoder += DELTA : *encoder -= DELTA; // Aumenta o incrementa en función del pin DT
+    // Pone límites al valor de salida
+    if (*encoder < LIM_MIN)
+    {
+        *encoder = LIM_MIN;
+        suenaBeepLimite = true;
+    } // Si toca limites hace sonar un beep
+    if (*encoder > LIM_MAX)
+    {
+        *encoder = LIM_MAX;
+        suenaBeepLimite = true;
+    }
+    return rotary != *encoder; // Sale con true si el rotary activo ha cambiado
+}
+/**************************************************************
+ * callback de la interrupción del pulsador
+ * ***********************************************************/
+void int_pulsador(void)
+{
+  if(!digitalRead(PULSADOR))//Si el pin sigue a 0...
+  intPulsador=true;//Es que se ha pulsado.
+}
+/***********************************************************
+    funcion scpi para depuración
+************************************************************/
+void suena_beep(void) { tone(BUZZER, FREQ_PRE, MS_PRE); }
+void display_on_off(void) { return; }
+void set_flag_1(void) { flag1 = !flag1; } // Cambia el flag1
+//*************************** fin ****************************
+

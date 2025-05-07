@@ -1,0 +1,44 @@
+// Select only one to be true for SAMD21. Must must be placed at the beginning before #include "SAMDTimerInterrupt.h"
+#define USING_TIMER_TC3         false      // Only TC3 can be used for SAMD51
+#define USING_TIMER_TC4         false     // Not to use with Servo library
+#define USING_TIMER_TC5         false
+#define USING_TIMER_TCC         false
+#define USING_TIMER_TCC1        true
+#define USING_TIMER_TCC2        false     // Don't use this, can crash on some boards
+
+#include <Arduino.h>
+#include <SAMDTimerInterrupt.h>
+
+SAMDTimer myTimer(TIMER_TCC);
+
+// flag for catching interrupt in void loop()
+volatile bool interrupt = 0;
+
+// a simple ISR
+void myISR(){
+  interrupt = 1;
+}
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+  // setting up timer interrupt with 500ms interval
+  myTimer.attachInterruptInterval_MS(500, myISR);
+}
+void loop() {
+  // put your main code here, to run repeatedly:
+  static unsigned long timer1;
+
+  // normal void loop routine, print every 2 seconds
+  if (millis() - timer1 > 2000){
+    Serial.println("Normal print");
+    timer1 = millis();
+  }
+
+  // process interrupt
+  if (interrupt){
+    Serial.println("Interrupt generated");
+    interrupt = 0;  // re-arm interrupt
+  }
+
+}

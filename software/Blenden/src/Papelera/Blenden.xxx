@@ -1,0 +1,229 @@
+/** 
+ * UNIVERSIDAD AUTÓNOMA DE MADRID
+ *  Proyecto: 20220390
+ *  Unidad Electronica para cañón de Electrones Detector
+ *  de  Haces Moléculares: Blenden
+ * 
+ *  Autor: Patricio Coronado Collado
+ *  Versión: 1.0 febrero 2024
+ *  Aplicación para SAMD21 ecosistema Arduino Seeeduino XIAO.
+ *  Descripción:
+ * 
+ *  Ultima actualizacion 13-03-2024
+ */
+#include <Arduino.h>
+#include <U8g2lib.h>          //Display
+#include <Wire.h>             //I2C para el display y el DAC
+#include <TimerTCC0.h>        //Timer para periodo de muestreo
+#include "WDTZero.h"          //Watchdog
+#include "scpi.h"         //Para depurar con SCPI
+#include "ZeroConfigureADC.h"
+/*************************************************************
+  Macros
+**************************************************************/
+#define DEP(x) if(depuracion) Serial.println(x)
+/**************************************************************
+ * Pines
+ * ************************************************************/
+#define PULSADOR 3
+#define PIN_TEST 2
+#define BLEN1 A0
+#define BLEN2 A1
+#define BLEN3 A6
+#define BLEN4 A10
+#define BLEN5 A9
+#define BLEN6 A8
+#define BLEN7 A7
+/**************************************************************
+ * Constantes y variables globales
+ **************************************************************/
+//Periodo de muestreo
+#define FACTOR 0.0029//Factor de conversión
+#define TS_20ms 20000 //us 
+//Display
+#define DISPLAY_FONT_2_LINEAS display.setFont(u8x8_font_courB18_2x3_f) //Font para solo 2 lineas LINEA1 y LINEA5
+#define LINEA1 1
+#define LINEA2 5
+//Flags
+uint16_t adc=0;
+bool leerADC=false;//Para indicar que hay que leer el ADC
+bool intPulsador=true;
+int8_t blendenActivo=1; //true deplection plate A activa false la B
+bool depuracion=true;
+char msg[64]; //Para mostar en el display
+uint8_t contadorMuestras=0; 
+bool pulsadorNextLoop=false;
+/**************************************************************
+ *  Objetos
+ **************************************************************/
+extern SegaSCPI segaScpi; //Comunicación con el PC
+U8X8_SH1106_128X64_NONAME_HW_I2C display(U8X8_PIN_NONE); // Display 
+#ifdef WATCHDOG
+  WDTZero WatchDog; // Objeto Watchdog
+#endif  
+ /**************************************************************
+ * prototipos de funciones
+ ***************************************************************/
+inline void display_saludo(void); // Presentación inicial UAM / SEGAINVEX
+void int_timer_ts(void); //Callback del timer para leer muestras del ADC
+inline bool cambio_blenden(int16_t*); //Rutina para actualizar el estado del rotary activo
+void int_pulsador(void); //Callback del timer del switch del rotary
+inline void muestra_tension(float);
+inline uint16_t lecturaADCn();
+/**************************************************************
+ * setup
+ ***************************************************************/
+void setup() {
+  
+  // Configuración ADC // https://blog.thea.codes/getting-the-most-out-of-the-samd21-adc/
+  while (ADC->STATUS.bit.SYNCBUSY == 1);                                                   // Sincroniza
+  ADC->INPUTCTRL.bit.GAIN = ADC_INPUTCTRL_GAIN_1X_Val;    // Ganancia 1
+  ADC->REFCTRL.bit.REFSEL = ADC_REFCTRL_REFSEL_AREFB_Val; // Pin de referencia A1
+  while (ADC->STATUS.bit.SYNCBUSY == 1);                   // Sincroniza
+  configure_ADC(3, 7, 10); // CLK_ADC 1.5MHz, muestras a promediaren cada lectura =64,tiempo de muestreo 2us
+  //analogReadResolution(12);//La resolución de los adcs a 12 bits
+  //analogReference(AR_INTERNAL1V0);
+  // Pines
+  pinMode(PULSADOR,INPUT);
+  pinMode(PIN_TEST,OUTPUT);
+  digitalWrite(PIN_TEST,HIGH);
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(PIN_LED_RXL,OUTPUT);
+  pinMode(PIN_LED_TXL,OUTPUT);
+  pinMode(LED_BUILTIN,OUTPUT);
+  digitalWrite(LED_BUILTIN,LOW);
+  //Display
+  display.begin();// Display
+  display.setBusClock(400000);//ADS1115 puede llegar a 400KHz
+  display_saludo(); //Muestra la presentación inicial
+  #define DISPLAY_FONT_2_LINEAS display.setFont(u8x8_font_courB18_2x3_f) //Font para solo 2 lineas LINEA1 y LINEA5
+  DISPLAY_FONT_2_LINEAS;  //Display con un font más grande
+  // Recursos
+  Serial.begin(115200);//Serial
+  Wire.setTimeout(5/*milisegundos*/); // Tieme out del I2C, para salir de cuelgues por el i2c
+  attachInterrupt(PULSADOR, int_pulsador, FALLING);
+  TimerTcc0.initialize(/*TS_20ms*/20000/*0,02 seg*/); // preferiblemente 20ms
+  TimerTcc0.attachInterrupt(int_timer_ts);
+  //Más Comandos del timer TimerTcc0.start();TimerTcc0.restart();TimerTcc0.stop();
+  #ifdef WATCHDOG
+  //WDT_HARDCYCLE62m  0x0430    // WDT HARD only : 64 clockcycles @ 1024hz = 62.5ms
+  //WDT_HARDCYCLE250m 0x0450    // WDT HARD only : 256 clockcycles @ 1024hz = 250ms
+  //WDT_HARDCYCLE1S   0x0470    // WDT HARD only : 1024 clockcycles @ 1024hz = 1 seg
+  //WDT_HARDCYCLE2S   0x0480    // WDT HARD only : 2048 clockcycles @ 1024hz = 2 seconds
+  //WDT_HARDCYCLE4S   0x0490    // WDT HARD cycle 4 Seconds
+    WatchDog.setup(WDT_HARDCYCLE1S);// Activa el watchdog WDT_SOFTCYCLE8S
+  #endif
+  muestra_tension(0.0); //Pantalla inicial del encoder
+}
+/**************************************************************
+ * loop
+ ***************************************************************/
+void loop() {
+   #ifdef WATCHDOG
+        WatchDog.clear(); // Refesca el watchdog
+   #endif
+  //Atiende al PC
+  if (Serial.available()){segaScpi.scpi(&Serial);}
+  // Código que responde a la interrupción del TS (tiempo de muestreo)
+  if(leerADC)
+  {
+   digitalWrite(PIN_TEST,LOW);
+   adc = adc+lecturaADCn(); //Acumula lecturas
+   digitalWrite(PIN_TEST,HIGH);
+   contadorMuestras++; 
+   leerADC=false;
+  }
+ if(contadorMuestras>=16)//Si se han acumulado 16 muestras las procesa y muestra en display
+  {
+    digitalWrite(PIN_LED_RXL, !digitalRead(PIN_LED_RXL)); // Led para ver la latencia
+    TimerTcc0.stop();
+    float tensionMedida = 0.00018399*((float)adc/16.0)-0.0047648;
+    if(tensionMedida < 0) tensionMedida=0;
+    muestra_tension(tensionMedida);
+    DEP("ADC="+String(adc));
+    DEP("tension="+String(tensionMedida));
+    DEP();
+    contadorMuestras=0; //Reinica la acumulación de muestras
+    adc=0;
+    TimerTcc0.start();
+  }
+    if (pulsadorNextLoop)
+  {
+    if (blendenActivo<7) blendenActivo++; //Selecciona el siguiente blenden
+    else blendenActivo = 1;
+    snprintf(msg,sizeof msg,"BLENDEN%d",blendenActivo); //
+    display.inverse();
+    display.drawString(0, LINEA1,msg);//
+    display.noInverse();
+    contadorMuestras=0; //reinicia el muestreo
+    adc=0;
+    pulsadorNextLoop=false;
+    intPulsador=false;
+    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN)); // Led para ver la latencia
+  }
+  if (intPulsador) pulsadorNextLoop=true; //Procesa el pulsador el próximo loop
+ }
+/*************************************************************
+  presenta el mensaje inicial en el display
+**************************************************************/
+inline void display_saludo(void)//Cartel de presentación inicial
+{
+  display.setFont(u8x8_font_8x13_1x2_f);
+  display.clear();
+  display.drawString(0, 0, "     UAM      ");
+  display.drawString(0, 2, "  SEGAINVEX   ");
+  display.drawString(0, 4, " ELECTRONICA  ");
+  display.drawString(0, 6, "DEPLECTION PLS");
+  delay(2000); // Presentación inicial del display
+  display.clear();
+}
+/**************************************************************
+ * Callback de la interrupción del temporizador del periodo de
+ * muestreo 
+ * ***********************************************************/
+void int_timer_ts(void)
+{
+  if(!leerADC)leerADC=true;
+}
+/**************************************************************
+ * función que lee la tensión del blenden seleccionado 
+ * ***********************************************************/
+inline uint16_t lecturaADCn()
+{
+  switch(blendenActivo)  
+  {
+    case 1:
+      return analogRead(BLEN1);
+    case 2:
+      return analogRead(BLEN2);
+    case 3:
+      return analogRead(BLEN3);
+    case 4:
+      return analogRead(BLEN4);
+    case 5:
+      return analogRead(BLEN5);
+    case 6:
+      return analogRead(BLEN6);
+    case 7:
+      return analogRead(BLEN7);
+    default:
+      return 0;
+   }
+    return -1;
+}
+/**************************************************************
+ * Muestra el estado en el display
+ * ***********************************************************/
+inline void muestra_tension(float tension)
+{    
+  snprintf(msg,sizeof msg," %3.1f V ",tension); //
+  display.drawString(0, LINEA2,msg);//
+}
+/**************************************************************
+ * callback de la interrupción del pulsador
+ * ***********************************************************/
+void int_pulsador(void)
+{
+  if(!intPulsador)intPulsador=true; //Para que lea el blenden activo
+}
+/*********************** FIN ***********************************/

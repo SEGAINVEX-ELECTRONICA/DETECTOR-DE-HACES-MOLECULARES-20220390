@@ -1,0 +1,395 @@
+/**
+ * UNIVERSIDAD AUTÓNOMA DE MADRID
+ *  Proyecto: 20220390
+ *  Unidad Electronica para cañón de Electrones Detector
+ *  de  Haces Moléculares: Relepller
+ *
+ *  Autor: Patricio Coronado Collado
+ *  Versión: 1.0 febrero 2024
+ *  Aplicación para SAMD21 ecosistema Arduino Seeeduino XIAO.
+ *  Descripción:
+ *
+ *  Ultima actualizacion 13-03-2024
+ */
+#include <Arduino.h>
+#include <U8g2lib.h>      //Display
+#include <Wire.h>         //I2C para el display y el DAC
+#include <TimerTCC0.h>    //Timer para periodo de muestreo
+#include "WDTZero.h"      //Watchdog
+#include <FlashStorage.h> //Para emular EEPROM
+#include "SegaSCPI.h"     //Para depurar con SCPI
+#include "ZeroConfigureADC.h"
+/*************************************************************
+  Macros
+**************************************************************/
+#define DEP(x) if(depuracion) Serial.println(x)
+ /**************************************************************
+ * Pines
+ * ************************************************************/
+#define CLK 2
+#define DT 3
+#define BUZZER 6
+#define PIN_ADC 8
+#define POLARIDAD 9
+#define PIN_TEST 10
+#define SWITCH_ENCODER // Para que compile la parte dedicada al switch del rotary encoder
+#ifdef SWITCH_ENCODER  // Switch del rotary opcional
+#define SW 7
+#endif
+//Constantes del Rotary encoder
+#define LIM_MAX 4095 // Valores límite del rotary encoder
+#define LIM_MIN -4095
+#define DELTA 15 // Incremento en cada pulso
+#define OFFSET_P 240 //Valor positivo más pequeño
+#define OFFSET_N -240 //Valor negativo más grande
+/**************************************************************
+ * Constantes y variables globales
+ **************************************************************/
+#define WATCHDOG // para que compile la parte del watchdog
+// Direcciones de los DACs MCP4725
+#define FREQ_LIM 600  // hz frecuencia
+#define FREQ_PRE 1500 // hz frecuencia
+#define MS_LIM 30     // mseg tiempo de duración
+#define MS_PRE 10     // mseg tiempo de duración
+#define ADD_DAC 0x60  // A0=0
+// Periodo de muestreo
+#define TS_20ms 20000 // us
+#define FACTOR 1.0    // Factor de convresión entre ADC y tensión medida
+// Display
+#define DISPLAY_FONT_2_LINEAS display.setFont(u8x8_font_courB18_2x3_f) // Font para solo 2 lineas LINEA1 y LINEA5
+#define LINEA1 1
+#define LINEA2 5
+#define POS false
+#define NEG true
+#ifdef SWITCH_ENCODER    // Switch del rotary opcional
+bool intSwitch = false; // Valor del pin sw del rotary
+#endif
+// Rotary encoder
+int16_t rotary = 0;         // Estado del rotary encoder
+bool polaridadRepeller = 0; // Polaridad de salida de Repeller
+uint16_t adc = 0;            // Valor digital del ADC
+uint16_t _adc =0;//Para guardar el ADC entre iteraciones
+int8_t muestrasLeidas = 0;  // Muestras acumuladas
+// Flags
+bool leerADC = false; // Para indicar que hay que leer el ADC
+bool intEncoder = true;
+bool depuracion = true;
+bool ckRotary = true;
+bool dtRotary = true;
+bool rotaryLimite = false;
+//
+char msg[64]; // Para mostar en el display
+/**************************************************************
+ *  Objetos
+ **************************************************************/
+extern SegaSCPI segaScpi;                                // Comunicación con el PC
+U8X8_SH1106_128X64_NONAME_HW_I2C display(U8X8_PIN_NONE); // Display
+#ifdef WATCHDOG
+WDTZero WatchDog; // Objeto Watchdog
+#endif
+/**************************************************************
+ * prototipos de funciones
+ ***************************************************************/
+inline void display_saludo(void);      // Presentación inicial UAM / SEGAINVEX
+void int_timerTS(void);                // Callback del timer para leer muestras del ADC
+inline bool cambio_en_encoder(int16_t *); // Rutina para actualizar el estado del rotary activo
+void int_encoder(void);                // Callback del rotary
+inline void muestra_tension(float, bool);
+//inline void actualiza_DAC(uint16_t, uint8_t, bool);
+inline void actualiza_polaridad(bool);
+inline void beep(uint32_t, uint32_t);
+void int_switch(void);
+inline void switch_encoder(void);
+inline void lectura_del_encoder(void);
+inline void calcula_tension(void);
+/**************************************************************
+ * setup
+ ***************************************************************/
+void setup()
+{
+    /*-------------------SOBRE INTERRUPCIONES DEL SAMD21-------------------
+      https://developerhelp.microchip.com/xwiki/bin/view/products/mcu-mpu/32bit-mcu/sam/samd21-mcu-overview/samd21-processor-overview/samd21-nvic-overview/
+      NVIC_SetPriority(XXX_IRQn, priority);  priority={0,1,2,3} o más alta.
+
+        Establece la prioridad para una interrupción *
+        void NVIC_SetPriority(IRQn_t IRQn, uint32_t prioridad);
+        Habilitar una interrupción específica del dispositivo *
+        void NVIC_EnableIRQ (IRQn_Type IRQn);
+        Deshabilitar una interrupción específica del dispositivo
+        void NVIC_DisableIRQ (IRQn_Type IRQn)
+        void NVIC_DisableIRQ (IRQn_Type IRQn)
+    ----------------------------------------------------------------------*/
+    // Experimental no he visto que tenga efecto
+    NVIC_SetPriority(EIC_IRQn, 4);  // Interrupciones de pines. Mínima prioridad
+    NVIC_SetPriority(TCC0_IRQn, 2); // Prioridad media de interrupción Timer0
+    NVIC_SetPriority(WDT_IRQn, 4);  // Interrupción del watchdog baja
+    // En el SEEEDUINO XIAO el wire está montado sobre  SERCOM2 SERCOM2_IRQn
+    NVIC_SetPriority(SERCOM2_IRQn, 0); // Interrupción del wire más alta
+    // NVIC_DisableIRQ(SERCOM2_IRQn);
+    // Configuración ADC
+    // https://blog.thea.codes/getting-the-most-out-of-the-samd21-adc/
+    while (ADC->STATUS.bit.SYNCBUSY == 1);//Sincroniza
+    ADC->INPUTCTRL.bit.GAIN = ADC_INPUTCTRL_GAIN_1X_Val;
+    ADC->REFCTRL.bit.REFSEL = ADC_REFCTRL_REFSEL_AREFB_Val;
+    while (ADC->STATUS.bit.SYNCBUSY == 1);
+    configure_ADC(3,6,1); // CLK_ADC 1.5MHz, muestras a promediar=64,tiempo de muestreo 2us
+    analogReadResolution(12);//La resolución de los adcs a 12 bits
+    //Pines
+    pinMode(CLK, INPUT_PULLUP);
+    pinMode(DT, INPUT_PULLUP);
+    pinMode(LED_BUILTIN, OUTPUT);
+    pinMode(PIN_LED_RXL, OUTPUT);
+    pinMode(PIN_LED_TXL, OUTPUT);
+    pinMode(POLARIDAD, OUTPUT);
+    pinMode(PIN_TEST, OUTPUT);
+    digitalWrite(PIN_TEST, HIGH);
+#ifdef SWITCH_ENCODER // Switch del rotary opcional
+    pinMode(SW, INPUT_PULLUP);
+#endif
+    //actualiza_DAC(OFFSET_P, ADD_DAC, 0); // Valor por defecto del DAC
+    // Display
+    display.begin(); // Display
+    display.setBusClock(400000);
+    display_saludo(); // Muestra la presentación inicial
+    // Recursos
+    Serial.begin(115200);                // Serial
+    Wire.setTimeout(5 /*milisegundos*/); // Tieme out del I2C, para salir de cuelgues por el i2c
+    attachInterrupt(CLK, int_encoder, FALLING);
+    TimerTcc0.initialize(TS_20ms /*0,2 seg*/); // preferiblemente 20ms
+    TimerTcc0.attachInterrupt(int_timerTS);
+#ifdef SWITCH_ENCODER                          // Switch del rotary opcional
+    attachInterrupt(SW, int_switch, FALLING); // Interrupción del swuitch del rotary encoder
+#endif
+// Más Comandos del timer TimerTcc0.start();TimerTcc0.restart();TimerTcc0.stop();
+#ifdef WATCHDOG
+    // WDT_HARDCYCLE62m  0x0430    // WDT HARD only : 64 clockcycles @ 1024hz = 62.5ms
+    // WDT_HARDCYCLE250m 0x0450    // WDT HARD only : 256 clockcycles @ 1024hz = 250ms
+    // WDT_HARDCYCLE1S   0x0470    // WDT HARD only : 1024 clockcycles @ 1024hz = 1 seg
+    // WDT_HARDCYCLE2S   0x0480    // WDT HARD only : 2048 clockcycles @ 1024hz = 2 seconds
+    // WDT_HARDCYCLE4S   0x0490    // WDT HARD cycle 4 Seconds
+    WatchDog.setup(WDT_HARDCYCLE1S); // Activa el watchdog WDT_SOFTCYCLE8S
+#endif
+    // //actualiza_DAC(0, ADD_DAC, 1); // El DAC y eeprom a cero
+    muestra_tension(0.0, false); // Pantalla inicial del encoder
+}
+/**************************************************************
+ * loop
+ ***************************************************************/
+void loop()
+{
+#ifdef WATCHDOG
+    WatchDog.clear(); // Refesca el watchdog
+#endif
+    // Atiende al PC
+    if (Serial.available())
+    {
+        segaScpi.scpi(&Serial);
+    }
+// Gestiona la interrupción del rotary encoder
+#ifdef SWITCH_ENCODER // Switch del rotary. Pone a cero la salida
+    if (intSwitch) {switch_encoder();} // ejecuta una función especifica
+#endif
+    if (intEncoder) lectura_del_encoder();// Rutina de atención al rotary encoder
+    // Promedia y muestas las lectuas del ADC
+    if (muestrasLeidas == 16) calcula_tension();
+    // Si a transcurrido un TS (periodo de muestreo) lee el ADC
+    if (leerADC)
+    {
+        digitalWrite(PIN_TEST,LOW);
+        adc = adc + analogRead(PIN_ADC);//+lecturaADC(); // Acumula lecturas del ADC menos offset
+        digitalWrite(PIN_TEST,HIGH);
+        muestrasLeidas++;
+        leerADC = false;
+    }
+}
+/*************************************************************
+     Rutina que responde al flag del periódo de muestreo 
+**************************************************************/
+inline void calcula_tension(void)
+{
+        TimerTcc0.stop(); // Detiene el timer de muestreo
+        float adcFloat;
+        adc = (adc >> 4); //Calcula la media (divide entre 16) y le resta el offset
+        if (adc != _adc) // Si el valor del ADC es diferente del anterior lo actualiza
+        {
+            _adc = adc;//Guarda una copia para la siguiente iteración
+            adcFloat = float(adc * FACTOR);
+            //muestra_tension(adcFloat, polaridadRepeller); //
+            display.drawString(0, LINEA2, "        "); //
+            display.drawString(0, LINEA2, String(adc).c_str()); //
+            //DEP(adc);
+        }
+        adc = 0;                                              // Resetea las variables para empezar un nuevo ciclo de medidas
+        muestrasLeidas = 0;                                   // Pone a cero el contdor de medidas
+        TimerTcc0.start();                                    // Arranca el timer de muestreo
+        digitalWrite(PIN_LED_RXL, !digitalRead(PIN_LED_RXL)); // Led para ver la latencia
+ }
+/**************************************************************
+ * Rutina de la interrupción del rotary encoder
+ * attachInterrupt(CLK_ROTARY_ENCODER, encoder, FALLING);
+ * ***********************************************************/
+void int_encoder(void)
+{
+    intEncoder = true;          // Flag qu deja pendiente la atención a la interrupción en el loop
+    NVIC_DisableIRQ(EIC_IRQn);  // Inhabilita esta interrupción que se habilitará cuando se limpie el flag intEncoder
+    ckRotary = digitalRead(CLK);//lee el pin CK del rotary
+    dtRotary = digitalRead(DT); // Lee el pin DP para detectar la dirección
+}
+/*************************************************************
+ *  Gestión del encoder
+ * **********************************************************/
+inline void lectura_del_encoder(void)
+{                                // Respuesta a la interrupción del encoder
+    if (cambio_en_encoder(&rotary)) // Comprueba si ha cambiado del encoder
+    {                            // Solo si rotary encoder ha cambiado..
+        if (rotary >= 0)
+        {
+            digitalWrite(POLARIDAD, polaridadRepeller = POS);
+            //actualiza_DAC(rotary, ADD_DAC, 0); // Actualiza el DAC, absoluto
+        }
+        else // rotary < 0
+        {
+            uint16_t rotPositivo = -1 * rotary;
+            //actualiza_DAC(rotPositivo, ADD_DAC, 0); // Actualiza el DAC, absoluto
+            digitalWrite(POLARIDAD, polaridadRepeller = NEG);
+        }
+        DEP(rotary);
+        digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN)); // Led para ver la latencia
+    }
+    if (rotaryLimite)
+    {
+        beep(FREQ_LIM, MS_LIM);
+        rotaryLimite = false;
+    } // Si el encoder está tocando límites emite un beep
+    else
+        beep(FREQ_PRE, MS_PRE); // Si no ha llegado a límite emite un beep de pulso de rotary encoder bueno PRE
+    intEncoder = false;         // Baja el flag de la interrupción del encoder
+    NVIC_EnableIRQ(EIC_IRQn);   // Habilita la interrupción de los pines para que funcione el encoder
+    //DEP(rotary);
+}
+/*************************************************************
+ *  función que actualiza el valor del rotary encoder
+ *  Los pines del encoder se leen en la interrupción
+ * ***********************************************************/
+inline bool cambio_en_encoder(int16_t *rotary)
+{
+    if (ckRotary) return false;                               // Si CK no está a nivel bajo sale sin hacer nada
+    int16_t _rotary = *rotary;                      // guarda el valor inicial de rotary activo
+    dtRotary ? *rotary += DELTA : *rotary -= DELTA; // Si el pin está a 1 decrementa y viceversa
+    // Pone límites al valor de salilda
+   if(*rotary >= 0 && *rotary < OFFSET_P) *rotary = OFFSET_P; //El valor del rotary tiene que estar entre   OFFSET < rotary < -OFFSET
+   if(*rotary <= -1 && *rotary > OFFSET_N) *rotary = OFFSET_N;
+   if (*rotary <= LIM_MIN)//Límite inferior
+    {
+        *rotary = LIM_MIN;
+        rotaryLimite = true;
+    }
+    if (*rotary >= LIM_MAX)//Límite superior
+    {
+        *rotary = LIM_MAX;
+        rotaryLimite = true;
+    }
+    // Sale con true si el rotary ha cambiado
+    return _rotary != *rotary;
+}
+/*************************************************************
+  Funciones para utilizar el display
+**************************************************************/
+inline void display_saludo(void) // Cartel de presentación inicial
+{
+    display.setFont(u8x8_font_8x13_1x2_f);
+    display.clear();
+    display.drawString(0, 0, "     UAM      ");
+    display.drawString(0, 2, "  SEGAINVEX   ");
+    display.drawString(0, 4, " ELECTRONICA  ");
+    display.drawString(0, 6, "   REPELLER   ");
+    delay(1000); // Presentación inicial del display
+    display.clear();
+    // Cambia la resolución
+    display.setFont(u8x8_font_courB18_2x3_f); // Display con un font más grande
+    display.inverse();
+    display.drawString(0, LINEA1, "REPELLER"); // Cartel de la fila superior
+    display.noInverse();
+}
+/**************************************************************
+ * Callback de la interrupción del temporizador del periodo de
+ * muestreo y función que lee los ADCs
+ * lectura de los ADCs (4mS)
+ * ***********************************************************/
+void int_timerTS(void) { leerADC = true; }
+/**************************************************************
+ * Muestra el estado en el display
+ * ***********************************************************/
+inline void muestra_tension(float tension, bool signo)
+{
+    if (signo)
+        tension *= (-1);                            // Si el relé está en negativo...
+    snprintf(msg, sizeof msg, "%+3.1f V", tension); //
+    uint8_t i;
+    for (i = 0; msg[i] != 'V'; i++)
+        ; // Evita que se vea una V doble
+    for (i += 1; i < 8; i++)
+    msg[i] = ' '; // borra todo desde V al final de la cadena
+    msg[++i] = 'V';
+    msg[8] = '\0';                      // Cierra bien la cadena
+    display.drawString(0, LINEA2, msg); //
+}
+/**************************************************************
+   Actualiza el valor del DAC MCP4725 12 bits por I2C
+   ver datasheet para detalles
+***************************************************************/
+//inline void actualiza_DAC(uint16_t dato, uint8_t direccion, bool eprom)
+/*
+{
+    //return;
+    // Dirección del MCP4725 de Adafruit A0=GND 0X62
+    Wire.beginTransmission(direccion); // dirección del MCP4725 de Adafruit A0=GND
+    if (eprom)
+        Wire.write(0x60); // Escribe el dato en el DAC y en EPROM
+    else
+        Wire.write(0x40);         // Escribe el dato en el DAC
+    Wire.write(dato / 16);        // 8 bites altos (D11.D10.D9.D8.D7.D6.D5.D4)
+    Wire.write((dato % 16) << 4); // 4 bites bajos (D3.D2.D1.D0)
+    Wire.endTransmission();
+    
+}*/
+/**************************************************************
+ * Actualiza la polaridad cambiando el estado del relé
+ ***************************************************************/
+inline void actualiza_polaridad(bool pol)
+{
+    polaridadRepeller = pol;
+    digitalWrite(POLARIDAD, polaridadRepeller);
+}
+/**************************************************************
+ *  entrega una señal cuadrada por el pin BUZZ de con
+ *  frecuencia FREQ hz y duración MS milisegundos, para
+ *  un buzzer pasivo
+ ***************************************************************/
+inline void beep(uint32_t frecuencia, uint32_t milisegundos)
+{
+    tone(BUZZER, frecuencia, milisegundos);
+}
+/**************************************************************
+ * callback de la interrupción del switch del ratary encoder.
+   Sube el flag para que se de servicio a la interrupción
+ * ***********************************************************/
+#ifdef SWITCH_ENCODER // Switch del rotary opcional
+    void int_switch(void) { intSwitch = true; }
+#endif
+/**************************************************************
+ * función que da servicio a la interrupción de switch del
+ * rotary encoder
+ * ***********************************************************/
+#ifdef SWITCH_ENCODER // Switch del rotary opcional
+inline void switch_encoder(void)
+{
+    rotary = 0;                   // Pone a cero el rotary
+    //actualiza_DAC(0, ADD_DAC, 0); // Actualiza el DAC a 0
+    polaridadRepeller = POS;      // Polaridad a positiva
+    actualiza_polaridad(POS);
+    intSwitch = false;
+    beep(FREQ_PRE, MS_PRE); // Emite un beep de aprobación
+}
+#endif
+/*********************** FIN ***********************************/

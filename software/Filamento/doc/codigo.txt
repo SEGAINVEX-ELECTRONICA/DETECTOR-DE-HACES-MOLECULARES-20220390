@@ -1,0 +1,414 @@
+
+// Rotary encoder
+  //  Read the current state of encoderCLK
+  crntCLK = digitalRead(CK);
+  // Read the state of the encoder's pushbutton value
+  SWstate = digitalRead(SW);
+  // A pulse occurs if the previous and the current state differ
+  if (crntCLK != prvsCLK)
+  {
+    // If the encoderDT state is different than the encoderCLK state then the rotary encoder is rotating counterclockwise
+    if (digitalRead(DT) != crntCLK)
+    {
+      if (SWstate == HIGH)
+      {
+        valorEncoder--;
+      }
+      else
+      {
+        valorEncoder = valorEncoder - 10;
+      }
+      // digitalWrite(ledCW, LOW);
+      // digitalWrite(ledCCW, HIGH);
+      if (valorEncoder < 0)
+      {
+        valorEncoder = -0;
+      }
+    }
+    else
+    {
+      // Encoder is rotating clockwise
+      if (SWstate == HIGH)
+      {
+        valorEncoder++;
+      }
+      else
+      {
+        valorEncoder = valorEncoder + 10;
+      }
+      // digitalWrite(ledCW, HIGH);
+      // digitalWrite(ledCCW, LOW);
+      if (valorEncoder > 180)
+      {
+        valorEncoder = 180;
+      }
+    }
+    }
+  prvsCLK = crntCLK;
+  //
+//
+//
+//
+//
+//
+ if (!digitalRead(CK2))
+  {
+     Serial.println(":)");
+     unsigned long now = millis() + 2;
+     do
+     { } while (now > millis());     // Espera 2ms
+     boolean clk = digitalRead(CK2); // Lee el pin que provoca la interrupción
+     if (clk)
+       return; // Si no está a nivel bajo sale sin hacer nada
+     boolean dt = digitalRead(DT2);
+     short _valorEncoder = valorEncoder2; // Guarda el valor actual de valorEncoder1   de entrada
+     // if (dt == false) //Poner la que registre el sentido correcto
+     if (dt == true)
+     {
+       valorEncoder2 += 1;
+     }
+     if (dt == false)
+     {
+       valorEncoder2 -= 1;
+     }
+     if (valorEncoder2 < 0)
+       valorEncoder2 = 0;
+     if (valorEncoder2 > 1000)
+       valorEncoder2 = 1000;
+     if (_valorEncoder != valorEncoder2) // Si hay que cambiar el valorEncoder2   levanta el flag para que "loop" lo cambie
+     {
+       cambiavalorEncoder = true;
+     }
+     intCK2=false;
+  }
+
+  clk1Actual=digitalRead(CK1);
+  if (clk1Actual!=clk1Anterior && !clk1Actual)//Si esta activo
+  {
+    clk1Anterior=clk1Actual;
+     
+     Serial.println(":)");
+     unsigned long now = millis() + 2;
+     do
+     {} while (now > millis());     // Espera 2ms
+     boolean clk = digitalRead(CK1); // Lee el pin que provoca la interrupción
+     if (clk)
+       return; // Si no está a nivel bajo sale sin hacer nada
+     boolean dt = digitalRead(DT1);
+     short _valorEncoder = valorEncoder1; // Guarda el valor actual de valorEncoder1   de entrada
+     // if (dt == false) //Poner la que registre el sentido correcto
+     if (dt == true)
+     {
+       valorEncoder1 += 1;
+     }
+     if (dt == false)
+     {
+       valorEncoder1 -= 1;
+     }
+     if (valorEncoder1 < 0)
+       valorEncoder1 = 0;
+     if (valorEncoder1 > 1000)
+       valorEncoder1 = 1000;
+     if (_valorEncoder != valorEncoder1) // Si hay que cambiar el valorEncoder1   levanta el flag para que "loop" lo cambie
+     {
+       cambiavalorEncoder = true;
+     }
+     intCK1=false;
+  }
+
+
+
+
+
+
+
+/************************************************************
+  Proyecto: Electrónica para detector de haces moleculares
+  OT:20220390
+  Set point del filamento
+  Recibe los set point de corriente y tensión del set point
+  de filamento y envía los valores de tensión y corriente
+  al microcontrolador del set point
+
+  UNIVERSIDAD AUTÓNOMA DE MADRID 
+  (SEGAINVEX-ELECTRÓNICA)
+  PAtricio Coronado Collado: Junio 2023
+***************************************************************/
+#include <Arduino.h>
+#include "scpi.h"
+#include <espnow.h>
+#include <ESP8266WiFi.h>
+#include "tipos.h"
+#include <Wire.h>
+#include "U8g2lib.h" //Display
+#include "Adafruit_ADS1015.h" //ADC ADS1115
+//*****************************
+//I2C device found at address 0x3C  Display
+//I2C device found at address 0x48  ADC
+//I2C device found at address 0x60  DAC
+//*****************************
+//*****************************
+// * funciones
+//*****************************
+inline void escucha_scpi(void);
+void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus);
+void OnDataRecv(uint8_t *mac, uint8_t *incomingData, uint8_t len);
+void ini_display(unsigned int);//inicializa display con frecuencia i2c
+void ini_adc(void);
+inline void lee_adc(void);
+inline void envia_medidas(void);
+inline void muestra_medidas(void);
+void inline serial_datos(void);
+void actualiza_DAC_MCP4725( uint16_t);
+//*****************************
+//constantes y variables globales
+//*****************************
+ bool depuracion=false;
+ short buclesTemp=0;
+ short buclesTemp2=0;
+ uint16_t DatoDAC=0;//Dato para el DAC
+ long adc1 = 0;
+ long adc2 = 0;
+ float corrienteFilamento=0.0;
+ float tensionFilamento=0.0;
+ long contadorEspera=0;
+ short valorEncoder = 0; 
+ short valorSuEncoder = 0; 
+ int crntCLK;
+ int prvsCLK;
+ int SWstate = 0;
+bool cambiavalorEncoder=false;
+#define DT 13
+#define CK 12
+#define SW 0
+#define LED 2
+bool estadoLed=false;
+long enviosFallidos=0;
+unsigned long antes=0;
+//espnow
+struct_message datosSalientes;
+struct_message datosEntrantes;//Para copiar los datos recibidos
+// 48:55:19:E0:27:40
+uint8_t broadcastAddress[] = {0x48, 0x55, 0x19, 0xE0, 0x27, 0x40}; //Mac del setpoint. Par espnow
+const char* identificacion = "  FILAMENTO"; 
+bool spnowActivo=false;
+bool datosRecibidos=false;
+bool datosEnviados=false;
+#define MAX_ENCODER 1000
+#define MAX_DAC 2300
+#define MILISEGUNDOS_LOOP 20
+//*****************************
+//  objetos
+//*****************************
+//Este objeto funciona bien con el display 2,4' y el de 1,3'
+U8X8_SH1106_128X64_NONAME_HW_I2C display(U8X8_PIN_NONE/*,15,14*/); // Display argumentos (reset,clk,data);
+Adafruit_ADS1115 ads; // Convertidor ADC I2C: ADS1115 I2C address 0x48 
+// El ADC MCP4725 se controla directamene con el wire
+//*****************************
+// * setup
+//*****************************
+void setup() {
+  //Inicializa objetos
+  Serial.begin(115200);
+  Wire.begin();
+  ini_display(1000000);//Inicializa display. Wire a 1MHz
+  pinMode(LED,OUTPUT);
+  //espnow
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  // Init ESP-NOW
+  if (esp_now_init() != 0) spnowActivo=false;
+  else spnowActivo=true;
+  if(spnowActivo)
+  {
+  // Once ESPNow is successfully Init, we will register for Send CB to
+  // get the status of Trasnmitted packet
+    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+    esp_now_register_send_cb(OnDataSent);
+    // Register peer
+    esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_COMBO, 1, NULL, 0);
+    // Register for a callback function that will be called when data is received
+    esp_now_register_recv_cb(OnDataRecv);
+    //    
+  }
+  ini_adc();
+}
+//*****************************
+// * loop
+//*****************************
+void loop()
+{
+  escucha_scpi();
+  if (datosRecibidos)
+  {
+    datosRecibidos = false;
+    char buffer[16];
+    snprintf(buffer,sizeof buffer,"%d  ",datosEntrantes.potCorriente); 
+    display.drawString(9, 2, buffer);
+    snprintf(buffer,sizeof buffer,"%d  ",datosEntrantes.potTension); 
+    display.drawString(9, 4, buffer);
+    char buffer2[64];
+    snprintf(buffer2,sizeof buffer,"Encoder1=%d\r\nEncoder2=%d\r\n",datosEntrantes.potCorriente,datosEntrantes.potTension); 
+    Serial.println(buffer2);
+  }
+  if (datosEnviados)
+  {
+    //Serial.printf("envios fallidos=%d\r\n", enviosFallidos);
+    datosEnviados = false;
+  }
+    // Temporización
+  if (millis() - antes > MILISEGUNDOS_LOOP)
+  {
+    //................................
+    actualiza_DAC_MCP4725(DatoDAC++);
+    if (DatoDAC==MAX_DAC)DatoDAC=0;
+    buclesTemp++;
+    buclesTemp2++;
+    //
+    if(buclesTemp>=10)
+    {
+        lee_adc();
+        envia_medidas();
+        muestra_medidas();
+        buclesTemp=0;
+    }
+    if(buclesTemp2>=100)
+    {
+      if(depuracion) serial_datos();
+      buclesTemp2=0;
+    }
+    
+    //.................................
+    antes = millis();
+  }
+}
+//*****************************
+// * scpi
+//*****************************
+inline void escucha_scpi(void)
+{
+  //Escucha al Serial USB
+  if (Serial.available())
+	{
+		scpi.scpi(&Serial);	
+	}
+}
+/**************************************
+ * Envía medidas del display
+***************************************/
+inline void envia_medidas(void)
+{
+  datosSalientes.iFilamento=corrienteFilamento;
+  datosSalientes.vFilamento=tensionFilamento;
+  if (spnowActivo)//Si espnow está activo envia datos
+  {
+    esp_now_send(broadcastAddress, (uint8_t *)&datosSalientes, sizeof(datosSalientes));
+    digitalWrite(LED, estadoLed = !estadoLed);
+  }
+}
+//*****************************
+// inicializa display
+//*****************************
+ void ini_display(unsigned int frecuenciaI2C)
+ { 
+  display.begin();
+  display.setBusClock(frecuenciaI2C);
+  display.setFont(u8x8_font_7x14_1x2_f);
+  display.drawUTF8(0, 0,identificacion);
+ }
+//******************************
+// Callback when data is sent
+//******************************
+void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus) 
+{
+  datosEnviados=true;
+  if (sendStatus == 0){ }
+  else{    enviosFallidos++;  }
+}
+//********************************
+// Callback when data is received
+//********************************
+void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) 
+{
+  memcpy(&datosEntrantes, incomingData, sizeof(datosEntrantes));
+  datosRecibidos=true;
+}
+//********************************
+// inicaliza adc
+//********************************
+inline void ini_adc(void)
+{
+    ads.begin(); // Inicializa conversor ADS1115
+    ads.setGain(GAIN_TWO); //LSB= (62.50191F/1000000.0)
+  /*
+  Según la ganancia que programemos tendremos un VFS y un LSB
+  teniendo en cuenta que son 15 bits de resolución ya que el
+  primer bit es el de signo. LSB=VFS/2^15
+
+  GAIN_TWOTHIRDS    = ADS1015_REG_CONFIG_PGA_6_144V,VFS=6,144V 15 BITS
+  GAIN_ONE          = ADS1015_REG_CONFIG_PGA_4_096V,VFS=4,096V 15 BITS
+  GAIN_TWO          = ADS1015_REG_CONFIG_PGA_2_048V,VFS=2,048V, LSB=62.50191F/ 1000000.0
+  GAIN_FOUR         = ADS1015_REG_CONFIG_PGA_1_024V, VFS=1,024V 15 BITS
+  GAIN_EIGHT        = ADS1015_REG_CONFIG_PGA_0_512V,VFS=0,512V 15 BITS
+  GAIN_SIXTEEN      = ADS1015_REG_CONFIG_PGA_0_256VVFS=0,256V 15 BITS
+  */
+}
+//*********************************
+// Lectura del adc
+//*********************************
+void lee_adc(void)
+{
+    //long _adc1=adc1; //Copia los valores anteriores
+    //long _adc2=adc2;
+    #define LSB_ADS 62.50191F / 1000000.0       // LSB del AD1115 con VFS=2.048V y 15 bits (el bit 16 es el de signo)
+    adc1 = ads.readADC_SingleEnded(1); // Lee el ADC1
+    adc2 = ads.readADC_SingleEnded(2); // Lee el ADC2
+    corrienteFilamento = adc1 * LSB_ADS;
+    tensionFilamento = adc2 * LSB_ADS;
+}
+//*********************************
+//  muestra variables del filamento
+//  en el display
+//*********************************
+inline void muestra_medidas(void)
+{
+    char buffer[16];
+    snprintf(buffer,sizeof buffer,"  %.2fA ",corrienteFilamento); 
+    display.drawString(0, 2, buffer);
+    snprintf(buffer,sizeof buffer,"  %.2fV ",tensionFilamento); 
+    display.drawString(0, 4, buffer);
+    snprintf(buffer,sizeof buffer,"  fallos:%d",enviosFallidos);
+    display.drawString(0, 6, buffer);
+}
+//************************************
+// ACTUALIZA EL VALOR DEL DAC
+//************************************
+void actualiza_DAC_MCP4725( uint16_t DatoDAC)
+{
+	Wire.beginTransmission(0X60);//dirección del MCP4725 de Adafruit A0=GND
+	Wire.write(0x40);//Escribe el dato en el DAC
+	Wire.write(DatoDAC / 16); // 8 bites altos (D11.D10.D9.D8.D7.D6.D5.D4)
+	Wire.write((DatoDAC % 16) << 4);// 4 bites bajos (D3.D2.D1.D0)
+	Wire.endTransmission();
+} 
+//********************************
+// envía todas las variables por
+// el puerto serie
+//********************************
+void inline serial_datos(void)
+{
+    char buffer[64];
+    snprintf(buffer,sizeof buffer,"Encoder1=%d\nEncoder2=%d\n",datosEntrantes.potCorriente,datosEntrantes.potTension); 
+    Serial.println(buffer);
+    snprintf(buffer,sizeof buffer,"Corriente=%.2f Amperios\nVoltaje=%.2f Voltios\n",corrienteFilamento,tensionFilamento); 
+    Serial.println(buffer);
+    snprintf(buffer,sizeof buffer,"Envios fallidos=%d\n\n",enviosFallidos); 
+    Serial.println(buffer);
+}
+//************* fin ****************
+
+
+
+
+
+

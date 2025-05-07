@@ -10,14 +10,15 @@
 ### Desarrollado por SEGAINVEX-Electrónica para el [Departamento de Física de Materiales, Microscopía De Efecto Túnel Y Nanociencia](https://www.uam.es/Ciencias/Departamento-de-Fisica-de-Materiales/1446767153239.htm)
 ### Junio 2024
 
-## [FIRMWARE microcontroladores](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR DE HACES MOLECULARES-20220390/blob/main/software/)
+## [Software de los microcontroladores](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/tree/master/software "software")
 ### Desarrollado con [Visual Studio Code](https://code.visualstudio.com/download) y [PlatformIO](https://platformio.org/)
     
-## [ESQUEMAS](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR DE HACES MOLECULARES-20220390/blob/main/esquemas/)
+## [ESQUEMAS](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/tree/master/esquemas "esquemas")
 ### 
-## [FOTOS DEL EQUIPO](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR DE HACES MOLECULARES-20220390/blob/main/fotos/) 
+## [FOTOS DEL EQUIPO](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/tree/master/fotos) 
 ###
-![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR DE HACES MOLECULARES-20220390/blob/main/fotos/foto6.JPG "trasera")
-![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR DE HACES MOLECULARES-20220390/blob/main/fotos/foto9.JPG "en laboratorio")
+![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/equipo2.jpg "frontal")
+![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/trasea.jpg "trasera")
+![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/interior.jpg "interior")
 
-###### publicado desde "X:\Ingenieria\Proyecto\2022\20220390 Fuente Detector Haces Moleculares\[10]github"
+###### publicado desde "D:\Proyectos\20220390 Fuente Detector Haces Moleculares\github"

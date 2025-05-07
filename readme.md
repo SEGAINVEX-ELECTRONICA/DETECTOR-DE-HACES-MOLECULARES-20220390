@@ -2,7 +2,7 @@
 ## [SEGAINVEX-Electrónica](https://www.uam.es/uam/segainvex)
 **Proyecto OT:20220390**
 
-![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/equipo2.jpg "frontal")
+![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/frontal.jpg "frontal")
 
 ## DESCRIPCIÓN
 ### Fuente de alimenación para detector de haces moleculares
@@ -19,7 +19,7 @@
 ### 
 ## [FOTOS DEL EQUIPO](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/tree/master/fotos) 
 ###
-![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/equipo2.jpg "frontal")
+![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/frontal.jpg "frontal")
 ![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/trasera.jpg "trasera")
 ![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/Interior.jpg "interior")
 

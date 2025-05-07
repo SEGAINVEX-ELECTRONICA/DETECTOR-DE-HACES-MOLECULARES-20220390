@@ -3,9 +3,9 @@
 **Proyecto OT:20220390 Junio 2024**
 ![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/frontal.jpg "frontal")
 ## DESCRIPCIÓN
-### Fuente de alimenación para detector de haces moleculares
+## Fuente de alimenación para detector de haces moleculares
 ![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/esquema.jpg "esquema conceptual")
-### Desarrollado por SEGAINVEX-Electrónica para el [Doctor Daniel Farías](http://webs.fmc.uam.es/daniel.farias/)
+### desarrollado por SEGAINVEX-Electrónica para el [Doctor Daniel Farías](http://webs.fmc.uam.es/daniel.farias/)
 ### del [Departamento de Física de la Material Condensada](https://www.uam.es/ciencias/inicio?language=es)
 ### [Software de los microcontroladores](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/tree/master/software "software")
 ## desarrollado con [Visual Studio Code](https://code.visualstudio.com/download) y [PlatformIO](https://platformio.org/)

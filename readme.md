@@ -18,7 +18,7 @@
 ## [FOTOS DEL EQUIPO](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/tree/master/fotos) 
 ###
 ![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/equipo2.jpg "frontal")
-![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/trasea.jpg "trasera")
-![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/interior.jpg "interior")
+![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/trasera.jpg "trasera")
+![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/Interior.jpg "interior")
 
 ###### publicado desde "D:\Proyectos\20220390 Fuente Detector Haces Moleculares\github"

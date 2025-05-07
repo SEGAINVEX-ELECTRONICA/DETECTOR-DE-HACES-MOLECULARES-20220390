@@ -7,7 +7,7 @@
 ## DESCRIPCIÓN
 ### Fuente de alimenación para detector de haces moleculares
 
-![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/esquemas/12%20Esquema%20conceptual.pdf "esquema conceptual")
+![Alt text](https://github.com/SEGAINVEX-ELECTRONICA/DETECTOR-DE-HACES-MOLECULARES-20220390/blob/master/fotos/esquema.jpg "esquema conceptual")
  
 ### Desarrollado por SEGAINVEX-Electrónica para el [Departamento de Física de Materiales, Microscopía De Efecto Túnel Y Nanociencia](https://www.uam.es/Ciencias/Departamento-de-Fisica-de-Materiales/1446767153239.htm)
 ### Junio 2024
